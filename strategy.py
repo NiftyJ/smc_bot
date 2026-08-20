@@ -126,11 +126,11 @@ class SMCStrategy:
                 if v is not None and not np.isnan(v) and v < price:
                     candidates.append(v)
 
-        # Sort by distance, deduplicate (merge levels within 20 points)
+        # Sort by distance, deduplicate (merge levels within tp_dedup)
         candidates.sort(key=lambda x: abs(x - price))
         deduped = []
         for c in candidates:
-            if not deduped or abs(c - deduped[-1]) > 20 * self.cfg.point:
+            if not deduped or abs(c - deduped[-1]) > self.cfg.tp_dedup:
                 deduped.append(c)
             if len(deduped) >= max_targets:
                 break
@@ -146,7 +146,7 @@ class SMCStrategy:
                     is_ob_entry: bool = False) -> float:
         """Compute stop loss price. Enforces minimum SL distance."""
         buf = self.cfg.sl_buffer
-        min_sl_dist = self.cfg.min_sl_pips * self.cfg.point * 10  # pips to price
+        min_sl_dist = self.cfg.min_sl_price
 
         sl = np.nan
 

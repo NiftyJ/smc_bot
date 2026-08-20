@@ -11,7 +11,7 @@ from strategy import SMCStrategy
 from backtest import compute_metrics, print_report
 from report import build_report, save_report
 
-SYMBOLS = ["EURUSD", "GBPUSD"]
+DEFAULT_SYMBOLS = ["NQ", "ES", "XAUUSD"]
 MAX_BARS = 500000
 
 def run_symbol(symbol: str):
@@ -77,11 +77,13 @@ def run_symbol(symbol: str):
     return report_name
 
 def main():
+    symbols = [s.upper() for s in sys.argv[1:]] or DEFAULT_SYMBOLS
+
     print("SMC Multi-Timeframe Strategy — Offline Backtest")
-    print(f"Symbols: {', '.join(SYMBOLS)}")
+    print(f"Symbols: {', '.join(symbols)}")
 
     reports = []
-    for symbol in SYMBOLS:
+    for symbol in symbols:
         result = run_symbol(symbol)
         if result:
             reports.append(result)

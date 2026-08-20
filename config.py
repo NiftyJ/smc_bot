@@ -3,13 +3,15 @@
 from dataclasses import dataclass, replace
 
 from costs import CostModel, get_model
+from instruments import Instrument, get_instrument
 
 
 @dataclass
 class Config:
-    # Symbol
+    # Symbol. Tick size, contract value, minimum stop and costs are taken from
+    # the instrument spec in instruments.py — see the properties below.
     symbol: str = "EURUSD"
-    point: float = 0.00001  # 5-digit broker
+    point: float | None = None  # override instrument tick size (rarely needed)
 
     # Timeframes (minutes)
     tf_d1: int = 1440
@@ -31,18 +33,19 @@ class Config:
     # Mid-TF alignment
     min_mid_tf_agree: int = 2      # Min mid-TFs agreeing with D1 (out of 3)
 
-    # Stop loss
-    sl_buffer_points: int = 3      # Points beyond SL level
-    min_sl_pips: float = 3.0       # Minimum SL distance in pips
-    min_rr: float = 2.0            # Minimum reward-to-risk
+    # Stop loss. None means "use the instrument default"; set a number to
+    # override in ticks. min_rr applies to every instrument.
+    sl_buffer_ticks: float | None = None   # Ticks beyond the SL level
+    min_sl_ticks: float | None = None      # Minimum SL distance in ticks
+    min_rr: float = 2.0                    # Minimum reward-to-risk
 
     # Risk
     risk_per_trade: float = 500.0
     initial_capital: float = 10000.0
 
-    # Trading costs — venue preset from costs.PRESETS. Costs scale with the
-    # position size the strategy chooses, so this materially changes results.
-    venue: str = "forex_ecn"
+    # Trading costs. By default they come from the instrument spec; set venue
+    # to a costs.PRESETS name to force a different fee structure.
+    venue: str | None = None
 
     # Entry / cooldown
     max_entry_attempts: int = 2    # Entries before range cooldown
@@ -64,13 +67,40 @@ class Config:
     mt5_bars: int = 100000           # Max bars to fetch per timeframe
 
     @property
+    def instrument(self) -> Instrument:
+        """Spec for the configured symbol."""
+        return get_instrument(self.symbol)
+
+    @property
+    def tick_size(self) -> float:
+        """Smallest price increment, overridable via ``point``."""
+        return self.point if self.point is not None else self.instrument.tick_size
+
+    @property
     def cost_model(self) -> CostModel:
-        """Cost model for this venue, using the instrument's point size."""
-        return replace(get_model(self.venue), point=self.point)
+        """Costs for this instrument, or for an explicitly forced venue."""
+        if self.venue is not None:
+            return replace(get_model(self.venue), point=self.tick_size)
+        return self.instrument.cost_model()
 
     @property
     def sl_buffer(self) -> float:
-        return self.sl_buffer_points * self.point
+        """Stop padding in price."""
+        ticks = (self.sl_buffer_ticks if self.sl_buffer_ticks is not None
+                 else self.instrument.sl_buffer_ticks)
+        return ticks * self.tick_size
+
+    @property
+    def min_sl_price(self) -> float:
+        """Minimum stop distance in price."""
+        ticks = (self.min_sl_ticks if self.min_sl_ticks is not None
+                 else self.instrument.min_stop_ticks)
+        return ticks * self.tick_size
+
+    @property
+    def tp_dedup(self) -> float:
+        """Take-profit levels closer together than this are merged."""
+        return self.instrument.tp_dedup_ticks * self.tick_size
 
     @property
     def htf_list(self) -> list[int]:

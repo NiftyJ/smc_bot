@@ -111,7 +111,27 @@ def download_symbol(symbol: str, out_file: str):
     combined.to_csv(out_file)
     return out_file
 
+# HistData publishes index and metal M1 bars alongside the forex pairs. These
+# are cash/CFD quotes, not exchange futures prints: the price path tracks the
+# front-month contract closely but session hours, gaps and spread do not match,
+# so treat results as an approximation of the futures market, not a replica.
+HISTDATA_SYMBOLS = {
+    "NQ": "nsxusd",       # Nasdaq 100 cash index
+    "ES": "spxusd",       # S&P 500 cash index
+    "XAUUSD": "xauusd",   # Spot gold
+    "EURUSD": "eurusd",
+    "GBPUSD": "gbpusd",
+}
+
+
 if __name__ == "__main__":
-    download_symbol("eurusd", "data_1m_EURUSD.csv")
-    download_symbol("gbpusd", "data_1m_GBPUSD.csv")
+    import sys
+
+    wanted = [s.upper() for s in sys.argv[1:]] or ["NQ", "ES", "XAUUSD"]
+    for sym in wanted:
+        if sym not in HISTDATA_SYMBOLS:
+            print(f"No HistData feed known for {sym}. "
+                  f"Options: {', '.join(HISTDATA_SYMBOLS)}")
+            continue
+        download_symbol(HISTDATA_SYMBOLS[sym], f"data_1m_{sym}.csv")
     print("\nDownload complete!")
