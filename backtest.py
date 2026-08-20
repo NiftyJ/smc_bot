@@ -3,19 +3,41 @@
 import numpy as np
 import pandas as pd
 
+from costs import CostModel, get_model
+
 
 def compute_metrics(trades: pd.DataFrame, initial_capital: float,
-                    commission_pct: float = 0.01) -> dict:
-    """Compute strategy performance metrics from trade log."""
+                    cost_model: CostModel | str | None = None) -> dict:
+    """Compute strategy performance metrics from trade log.
+
+    Args:
+        trades: Trade log with at least ``pnl``; ``qty`` and ``entry_price``
+            are used to scale costs with position size.
+        initial_capital: Starting account balance.
+        cost_model: A CostModel, a venue name from ``costs.PRESETS``, or None
+            to use the ECN forex default.
+    """
     if trades.empty:
         return {"total_trades": 0, "net_pnl": 0.0, "win_rate": 0.0}
 
+    if cost_model is None:
+        cost_model = get_model("forex_ecn")
+    elif isinstance(cost_model, str):
+        cost_model = get_model(cost_model)
+
     pnl = trades["pnl"].values.copy()
-    # Apply commission as fixed cost per lot traded (not % of notional)
-    # For forex: commission is typically $7/lot round trip
-    # qty here is in units, so approximate lots = qty * point_value
-    # Simpler: use a small fixed cost per trade as a proxy
-    commissions = np.full(len(pnl), 0.70)  # ~$0.70 per micro-lot round trip
+
+    # Costs scale with position size. The strategy sizes as
+    # risk_per_trade / sl_dist, so a tight stop means a large notional and a
+    # correspondingly large round-turn cost — charging a flat fee here is what
+    # makes a backtest look profitable and the live account bleed.
+    if "qty" in trades.columns:
+        qty = trades["qty"].values
+        price = (trades["entry_price"].values if "entry_price" in trades.columns
+                 else np.ones(len(pnl)))
+        commissions = np.array([cost_model.total(q, p) for q, p in zip(qty, price)])
+    else:
+        commissions = np.full(len(pnl), cost_model.flat_per_trade)
     pnl -= commissions
 
     wins = pnl[pnl > 0]
@@ -91,6 +113,8 @@ def compute_metrics(trades: pd.DataFrame, initial_capital: float,
         "max_win_streak": max_streak_w,
         "max_loss_streak": max_streak_l,
         "total_commissions": round(commissions.sum(), 2),
+        "avg_commission": round(commissions.mean(), 2),
+        "cost_model": cost_model.name,
         "exit_reasons": exit_counts,
         "entry_modes": mode_counts,
         "long_trades": len(longs),
@@ -123,7 +147,9 @@ def print_report(metrics: dict, trades: pd.DataFrame):
     print(f"  Recovery Factor:  {metrics['recovery_factor']}")
     print(f"  Max Win Streak:   {metrics['max_win_streak']}")
     print(f"  Max Loss Streak:  {metrics['max_loss_streak']}")
-    print(f"  Commissions:      ${metrics['total_commissions']:,.2f}")
+    print(f"  Commissions:      ${metrics['total_commissions']:,.2f}"
+          f"  (avg ${metrics.get('avg_commission', 0):,.2f}/trade)")
+    print(f"  Cost Model:       {metrics.get('cost_model', 'n/a')}")
 
     print(f"\n  --- Direction ---")
     print(f"  Long:  {metrics['long_trades']} trades, PnL ${metrics['long_pnl']:,.2f}")

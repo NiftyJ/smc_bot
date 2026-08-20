@@ -1,6 +1,8 @@
 """Strategy configuration — all parameters from TRADING_LOGIC.md."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+from costs import CostModel, get_model
 
 
 @dataclass
@@ -37,8 +39,10 @@ class Config:
     # Risk
     risk_per_trade: float = 500.0
     initial_capital: float = 10000.0
-    commission_pct: float = 0.01
-    slippage_points: int = 2
+
+    # Trading costs — venue preset from costs.PRESETS. Costs scale with the
+    # position size the strategy chooses, so this materially changes results.
+    venue: str = "forex_ecn"
 
     # Entry / cooldown
     max_entry_attempts: int = 2    # Entries before range cooldown
@@ -58,6 +62,11 @@ class Config:
 
     # MT5 data
     mt5_bars: int = 100000           # Max bars to fetch per timeframe
+
+    @property
+    def cost_model(self) -> CostModel:
+        """Cost model for this venue, using the instrument's point size."""
+        return replace(get_model(self.venue), point=self.point)
 
     @property
     def sl_buffer(self) -> float:

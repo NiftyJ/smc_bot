@@ -62,7 +62,7 @@ def run_symbol(symbol: str):
         print(f"\n  No trades generated for {symbol}.")
         return None
 
-    metrics = compute_metrics(trades, cfg.initial_capital, cfg.commission_pct)
+    metrics = compute_metrics(trades, cfg.initial_capital, cfg.cost_model)
     print_report(metrics, trades)
 
     print("\n[4/4] Generating HTML report...")

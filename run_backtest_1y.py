@@ -75,7 +75,7 @@ def run_symbol(symbol: str):
         return
 
     # Metrics
-    metrics = compute_metrics(trades, cfg.initial_capital, cfg.commission_pct)
+    metrics = compute_metrics(trades, cfg.initial_capital, cfg.cost_model)
     print_report(metrics, trades)
 
     # HTML Report

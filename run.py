@@ -34,6 +34,9 @@ def parse_args():
     p.add_argument("--capital", type=float, default=10000, help="Initial capital")
     p.add_argument("--risk", type=float, default=500, help="Risk per trade ($)")
     p.add_argument("--min-rr", type=float, default=2.0, help="Minimum RR to enter")
+    p.add_argument("--venue", default="forex_ecn",
+                   help="Cost model: forex_ecn, forex_standard, futures_6e, "
+                        "futures_m6e, crypto_perp, legacy_flat")
     p.add_argument("--plot", action="store_true", help="Show equity/drawdown plot")
     p.add_argument("--csv", default="", help="Export trades to CSV")
     return p.parse_args()
@@ -50,6 +53,7 @@ def main():
         min_rr=args.min_rr,
         trade_start=args.start,
         trade_end=args.end,
+        venue=args.venue,
     )
 
     # ---- Connect to MT5 ----
@@ -88,7 +92,7 @@ def main():
         return
 
     # ---- Metrics ----
-    metrics = compute_metrics(trades, cfg.initial_capital, cfg.commission_pct)
+    metrics = compute_metrics(trades, cfg.initial_capital, cfg.cost_model)
     print_report(metrics, trades)
 
     # ---- CSV export ----
