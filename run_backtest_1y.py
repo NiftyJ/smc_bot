@@ -1,9 +1,10 @@
 """
-Backtest SMC strategy on 1 year of data for EURUSD and GBPUSD.
+Backtest SMC strategy on 1 year of data for the configured futures contracts.
 Generates separate HTML reports for each symbol.
 
 Usage:
-  python run_backtest_1y.py
+  python run_backtest_1y.py             # MES + MNQ (micros)
+  python run_backtest_1y.py ES NQ       # full-size E-minis
 """
 
 import sys
@@ -22,13 +23,18 @@ from backtest import compute_metrics, print_report
 from report import build_report, save_report
 
 
-SYMBOLS = ["EURUSD", "GBPUSD"]
+# Micros by default: a $10k account cannot size a full-size ES/NQ contract
+# sensibly at $250 risk per trade.
+SYMBOLS = sys.argv[1:] or ["MES", "MNQ"]
+
+RISK_PER_TRADE = 250.0
+RTH_ONLY = False        # set True to skip the thin overnight session
 
 # 1 year back from today
 END_DATE = datetime.now().strftime("%Y-%m-%d")
 START_DATE = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
 
-# ~375k M1 bars covers 1 year of forex (260 trading days * 24h * 60m)
+# ~350k M1 bars covers 1 year of CME futures (252 sessions * 23h * 60m)
 # Request 500k to have margin; MT5 will return what's available
 MAX_BARS = 500000
 
@@ -43,13 +49,15 @@ def run_symbol(symbol: str):
         symbol=symbol,
         mt5_bars=MAX_BARS,
         initial_capital=10000,
-        risk_per_trade=500,
+        risk_per_trade=RISK_PER_TRADE,
+        rth_only=RTH_ONLY,
         min_rr=2.0,
         trade_start=START_DATE,
         trade_end=END_DATE,
     )
 
     # Fetch data
+    print(f"  {cfg.instrument.summary()}")
     print(f"\n[1/4] Fetching {symbol} data (up to {MAX_BARS} M1 bars)...")
     timeframes = [cfg.tf_d1, cfg.tf_h4, cfg.tf_h1, cfg.tf_m30, cfg.tf_m5, cfg.tf_m1]
     t0 = time.time()
@@ -75,7 +83,7 @@ def run_symbol(symbol: str):
         return
 
     # Metrics
-    metrics = compute_metrics(trades, cfg.initial_capital, cfg.commission_pct)
+    metrics = compute_metrics(trades, cfg.initial_capital, cfg)
     print_report(metrics, trades)
 
     # HTML Report

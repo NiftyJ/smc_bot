@@ -5,18 +5,34 @@ import pandas as pd
 
 
 def compute_metrics(trades: pd.DataFrame, initial_capital: float,
-                    commission_pct: float = 0.01) -> dict:
-    """Compute strategy performance metrics from trade log."""
+                    cfg=None) -> dict:
+    """
+    Compute strategy performance metrics from the trade log.
+
+    Costs come from the trade log itself: the strategy books the instrument's
+    round-turn commission and assumed slippage per contract on every trade
+    (futures commission is real — roughly $1.20 round turn on a micro and
+    $4.20 on a full-size E-mini — it is just tiny next to the notional).
+    Older logs without those columns fall back to `cfg`, then to zero.
+    """
     if trades.empty:
         return {"total_trades": 0, "net_pnl": 0.0, "win_rate": 0.0}
 
-    pnl = trades["pnl"].values.copy()
-    # Apply commission as fixed cost per lot traded (not % of notional)
-    # For forex: commission is typically $7/lot round trip
-    # qty here is in units, so approximate lots = qty * point_value
-    # Simpler: use a small fixed cost per trade as a proxy
-    commissions = np.full(len(pnl), 0.70)  # ~$0.70 per micro-lot round trip
-    pnl -= commissions
+    gross = trades["pnl"].values.astype(float)
+
+    if "commission" in trades.columns:
+        commissions = trades["commission"].values.astype(float)
+    elif cfg is not None:
+        commissions = cfg.commission_per_contract * trades["qty"].values.astype(float)
+    else:
+        commissions = np.zeros(len(gross))
+
+    if "slippage" in trades.columns:
+        slippage = trades["slippage"].values.astype(float)
+    else:
+        slippage = np.zeros(len(gross))
+
+    pnl = gross - commissions - slippage
 
     wins = pnl[pnl > 0]
     losses = pnl[pnl <= 0]
@@ -90,7 +106,11 @@ def compute_metrics(trades: pd.DataFrame, initial_capital: float,
         "recovery_factor": round(recovery_factor, 3),
         "max_win_streak": max_streak_w,
         "max_loss_streak": max_streak_l,
+        "gross_pnl_before_costs": round(gross.sum(), 2),
         "total_commissions": round(commissions.sum(), 2),
+        "total_slippage": round(slippage.sum(), 2),
+        "total_contracts": round(float(trades["qty"].sum()), 2) if "qty" in trades.columns else 0.0,
+        "avg_contracts": round(float(trades["qty"].mean()), 2) if "qty" in trades.columns else 0.0,
         "exit_reasons": exit_counts,
         "entry_modes": mode_counts,
         "long_trades": len(longs),
@@ -123,7 +143,10 @@ def print_report(metrics: dict, trades: pd.DataFrame):
     print(f"  Recovery Factor:  {metrics['recovery_factor']}")
     print(f"  Max Win Streak:   {metrics['max_win_streak']}")
     print(f"  Max Loss Streak:  {metrics['max_loss_streak']}")
+    print(f"  Gross (pre-cost): ${metrics['gross_pnl_before_costs']:,.2f}")
     print(f"  Commissions:      ${metrics['total_commissions']:,.2f}")
+    print(f"  Slippage:         ${metrics['total_slippage']:,.2f}")
+    print(f"  Contracts traded: {metrics['total_contracts']:,.0f} (avg {metrics['avg_contracts']}/trade)")
 
     print(f"\n  --- Direction ---")
     print(f"  Long:  {metrics['long_trades']} trades, PnL ${metrics['long_pnl']:,.2f}")

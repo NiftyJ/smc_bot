@@ -35,7 +35,7 @@ def _candle_fig(df_slice: pd.DataFrame, title: str,
                 entry_price: float, exit_price: float,
                 sl: float, tp: float,
                 entry_time: pd.Timestamp, exit_time: pd.Timestamp,
-                direction: str) -> go.Figure:
+                direction: str, digits: int = 5) -> go.Figure:
     """Build a candlestick chart with trade markers."""
     fig = go.Figure()
 
@@ -61,7 +61,7 @@ def _candle_fig(df_slice: pd.DataFrame, title: str,
                   y0=entry_price, y1=entry_price,
                   line=dict(color=ENTRY_COLOR, width=1.5, dash="dash"))
     fig.add_annotation(x=entry_time, y=entry_price,
-                       text=f"ENTRY {entry_price:.5f}",
+                       text=f"ENTRY {entry_price:.{digits}f}",
                        showarrow=True, arrowhead=2,
                        font=dict(color=ENTRY_COLOR, size=10),
                        arrowcolor=ENTRY_COLOR, ax=0, ay=-30)
@@ -71,7 +71,7 @@ def _candle_fig(df_slice: pd.DataFrame, title: str,
                   y0=sl, y1=sl,
                   line=dict(color=SL_COLOR, width=1.5, dash="dot"))
     fig.add_annotation(x=x_max, y=sl,
-                       text=f"SL {sl:.5f}",
+                       text=f"SL {sl:.{digits}f}",
                        showarrow=False,
                        font=dict(color=SL_COLOR, size=9),
                        xanchor="right")
@@ -81,7 +81,7 @@ def _candle_fig(df_slice: pd.DataFrame, title: str,
                   y0=tp, y1=tp,
                   line=dict(color=TP_COLOR, width=1.5, dash="dot"))
     fig.add_annotation(x=x_max, y=tp,
-                       text=f"TP {tp:.5f}",
+                       text=f"TP {tp:.{digits}f}",
                        showarrow=False,
                        font=dict(color=TP_COLOR, size=9),
                        xanchor="right")
@@ -94,7 +94,7 @@ def _candle_fig(df_slice: pd.DataFrame, title: str,
         x=[exit_time], y=[exit_price],
         mode="markers+text",
         marker=dict(size=12, color=exit_color, symbol="x"),
-        text=[f"EXIT {exit_price:.5f}"],
+        text=[f"EXIT {exit_price:.{digits}f}"],
         textposition="top center",
         textfont=dict(color=exit_color, size=10),
         name="Exit",
@@ -125,7 +125,7 @@ def _candle_fig(df_slice: pd.DataFrame, title: str,
         paper_bgcolor=CARD_BG,
         plot_bgcolor=BG,
         xaxis=dict(rangeslider_visible=False, gridcolor=GRAY),
-        yaxis=dict(gridcolor=GRAY, tickformat=".5f"),
+        yaxis=dict(gridcolor=GRAY, tickformat=f".{digits}f"),
         height=350,
         margin=dict(l=60, r=30, t=40, b=30),
         showlegend=False,
@@ -143,6 +143,11 @@ def build_report(trades: pd.DataFrame, metrics: dict,
     m5 = data[cfg.tf_m5]
     h4 = data[cfg.tf_h4]
     d1 = data[cfg.tf_d1]
+
+    # Price precision follows the instrument's tick size (2 dp for ES/NQ,
+    # 5 dp for a 5-digit FX pair)
+    digits = getattr(cfg, "digits", 5)
+    inst = getattr(cfg, "instrument", None)
 
     # ---- Equity & Drawdown ----
     equity = metrics["equity_curve"]
@@ -201,7 +206,9 @@ def build_report(trades: pd.DataFrame, metrics: dict,
         exit_p = row["exit_price"]
         sl = row["sl"]
         tp = row["tp"]
-        pnl = row["pnl"]
+        pnl = row.get("net_pnl", row["pnl"])   # after commission + slippage
+        qty = row.get("qty", 0)
+        costs = row.get("commission", 0.0) + row.get("slippage", 0.0)
         trigger = row.get("trigger", "")
         mode = row.get("entry_mode", "")
         reason = row.get("exit_reason", "")
@@ -219,7 +226,7 @@ def build_report(trades: pd.DataFrame, metrics: dict,
 
         d1_title = f"D1 | Bias Context"
         d1_fig = _candle_fig(d1_slice, d1_title, entry_p, exit_p, sl, tp,
-                             entry_t, exit_t, direction)
+                             entry_t, exit_t, direction, digits)
 
         # H4 slice: ±40 bars around entry (~1 week each side)
         h4_loc = h4.index.searchsorted(entry_t)
@@ -229,7 +236,7 @@ def build_report(trades: pd.DataFrame, metrics: dict,
 
         h4_title = f"H4 | Structure Context"
         h4_fig = _candle_fig(h4_slice, h4_title, entry_p, exit_p, sl, tp,
-                             entry_t, exit_t, direction)
+                             entry_t, exit_t, direction, digits)
 
         # M5 slice: ±60 bars around entry
         m5_loc = m5.index.searchsorted(entry_t)
@@ -239,7 +246,7 @@ def build_report(trades: pd.DataFrame, metrics: dict,
 
         m5_title = f"M5 | Confirmation"
         m5_fig = _candle_fig(m5_slice, m5_title, entry_p, exit_p, sl, tp,
-                             entry_t, exit_t, direction)
+                             entry_t, exit_t, direction, digits)
 
         # M1 slice: ±100 bars around entry
         m1_loc = m1.index.searchsorted(entry_t)
@@ -249,7 +256,7 @@ def build_report(trades: pd.DataFrame, metrics: dict,
 
         m1_title = f"M1 | Entry Detail"
         m1_fig = _candle_fig(m1_slice, m1_title, entry_p, exit_p, sl, tp,
-                             entry_t, exit_t, direction)
+                             entry_t, exit_t, direction, digits)
 
         trade_charts_html += f"""
         <div class="trade-card">
@@ -264,26 +271,34 @@ def build_report(trades: pd.DataFrame, metrics: dict,
             <div class="trade-stats">
                 <div class="stat">
                     <span class="stat-label">Entry</span>
-                    <span class="stat-value">{entry_p:.5f}</span>
+                    <span class="stat-value">{entry_p:.{digits}f}</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Exit</span>
-                    <span class="stat-value">{exit_p:.5f}</span>
+                    <span class="stat-value">{exit_p:.{digits}f}</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">SL</span>
-                    <span class="stat-value" style="color:{SL_COLOR}">{sl:.5f}</span>
+                    <span class="stat-value" style="color:{SL_COLOR}">{sl:.{digits}f}</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">TP</span>
-                    <span class="stat-value" style="color:{TP_COLOR}">{tp:.5f}</span>
+                    <span class="stat-value" style="color:{TP_COLOR}">{tp:.{digits}f}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">{"Contracts" if inst and inst.kind == "futures" else "Units"}</span>
+                    <span class="stat-value">{qty:,.0f}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Costs</span>
+                    <span class="stat-value">${costs:,.2f}</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">RR Target</span>
                     <span class="stat-value">{rr:.2f}</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-label">PnL</span>
+                    <span class="stat-label">Net PnL</span>
                     <span class="stat-value" style="color:{pnl_color}">${pnl:+,.2f}</span>
                 </div>
                 <div class="stat">
@@ -477,7 +492,7 @@ def build_report(trades: pd.DataFrame, metrics: dict,
 </head>
 <body>
   <h1>SMC Multi-Timeframe Strategy Report</h1>
-  <div class="subtitle">{cfg.symbol} | M1 bars: {len(m1):,} | {m1.index[0].strftime('%Y-%m-%d')} to {m1.index[-1].strftime('%Y-%m-%d')}</div>
+  <div class="subtitle">{inst.description if inst else cfg.symbol} ({cfg.symbol}) | tick {inst.tick_size:g} = ${inst.tick_value:g} | ${inst.multiplier:g}/point | comm ${cfg.commission_per_contract:g} RT | M1 bars: {len(m1):,} | {m1.index[0].strftime('%Y-%m-%d')} to {m1.index[-1].strftime('%Y-%m-%d')}</div>
 
   <h2>Performance Summary</h2>
   {stats_html}

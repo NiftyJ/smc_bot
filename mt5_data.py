@@ -5,6 +5,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
 
+from instruments import resolve
+
 TF_MAP = {
     1: mt5.TIMEFRAME_M1,
     5: mt5.TIMEFRAME_M5,
@@ -34,6 +36,51 @@ def init_mt5() -> bool:
 
 def shutdown_mt5():
     mt5.shutdown()
+
+
+def resolve_broker_symbol(symbol: str) -> str:
+    """
+    Find the broker's spelling of a symbol and make sure it is selected.
+
+    Futures symbols vary a lot between MT5 brokers — the ES E-mini can appear
+    as "ES", "ESU5", "ES.cme", "SP500_F" or "[SP500]" — so match on the
+    instrument root and its known aliases, preferring the front month.
+    Returns the broker symbol, or the input unchanged if nothing better fits.
+    """
+    if mt5.symbol_info(symbol) is not None:
+        mt5.symbol_select(symbol, True)
+        return symbol
+
+    spec = resolve(symbol)
+    roots = [spec.name] + [a for a in spec.aliases]
+    all_syms = mt5.symbols_get() or []
+
+    def norm(s: str) -> str:
+        return "".join(ch for ch in s.upper() if ch.isalnum())
+
+    matches = []
+    for s in all_syms:
+        n = norm(s.name)
+        for root in roots:
+            r = norm(root)
+            # exact root, or root + contract-month suffix (e.g. MESU5, ESZ25)
+            if n == r or (n.startswith(r) and len(n) - len(r) <= 3):
+                matches.append(s.name)
+                break
+
+    if not matches:
+        print(f"  WARNING: no broker symbol found for {symbol} "
+              f"({spec.description}). Check Market Watch / symbol naming.")
+        return symbol
+
+    # Prefer the shortest (continuous/front-month) spelling
+    matches.sort(key=lambda x: (len(x), x))
+    chosen = matches[0]
+    if chosen != symbol:
+        print(f"  Symbol '{symbol}' -> broker symbol '{chosen}' "
+              f"({spec.description})")
+    mt5.symbol_select(chosen, True)
+    return chosen
 
 
 def fetch_ohlcv(symbol: str, tf_minutes: int, num_bars: int) -> pd.DataFrame:
@@ -68,6 +115,7 @@ def fetch_all_timeframes(symbol: str, timeframes: list[int],
     Returns dict mapping tf_minutes -> DataFrame.
     """
     data = {}
+    symbol = resolve_broker_symbol(symbol)
     for tf in timeframes:
         name = TF_NAMES.get(tf, f"{tf}m")
         # Scale bars relative to M1 request; cap per-TF to avoid MT5 errors

@@ -126,11 +126,13 @@ class SMCStrategy:
                 if v is not None and not np.isnan(v) and v < price:
                     candidates.append(v)
 
-        # Sort by distance, deduplicate (merge levels within 20 points)
+        # Sort by distance, deduplicate (merge levels closer than the
+        # instrument's dedupe distance — 20 ticks FX, 8 ticks = 2 pts on ES)
         candidates.sort(key=lambda x: abs(x - price))
+        dedupe_dist = self.cfg.tp_dedupe_dist
         deduped = []
         for c in candidates:
-            if not deduped or abs(c - deduped[-1]) > 20 * self.cfg.point:
+            if not deduped or abs(c - deduped[-1]) > dedupe_dist:
                 deduped.append(c)
             if len(deduped) >= max_targets:
                 break
@@ -146,7 +148,7 @@ class SMCStrategy:
                     is_ob_entry: bool = False) -> float:
         """Compute stop loss price. Enforces minimum SL distance."""
         buf = self.cfg.sl_buffer
-        min_sl_dist = self.cfg.min_sl_pips * self.cfg.point * 10  # pips to price
+        min_sl_dist = self.cfg.min_sl_dist  # instrument minimum, in price units
 
         sl = np.nan
 
@@ -174,8 +176,38 @@ class SMCStrategy:
                 sl = price - min_sl_dist
             elif direction == -1 and (sl - price) < min_sl_dist:
                 sl = price + min_sl_dist
+            # Snap to a tradable tick (widening, never tightening, the stop)
+            inst = self.cfg.instrument
+            if direction == 1:
+                sl = np.floor(sl / inst.tick_size) * inst.tick_size
+            else:
+                sl = np.ceil(sl / inst.tick_size) * inst.tick_size
 
         return sl
+
+    # ------------------------------------------------------------------
+    # Session filter
+    # ------------------------------------------------------------------
+    def _session_mask(self, index: pd.DatetimeIndex):
+        """
+        Boolean mask of bars inside the instrument's Regular Trading Hours.
+
+        Returns None when no filter applies (rth_only off, or a 24h market).
+        Bar timestamps are assumed to be in cfg.data_tz (MT5 feeds are usually
+        broker-server time — set data_tz to match, or leave UTC).
+        """
+        cfg = self.cfg
+        inst = cfg.instrument
+        if not cfg.rth_only or inst.rth_start >= inst.rth_end:
+            return None
+        idx = index.tz_localize(cfg.data_tz) if index.tz is None else index
+        local = idx.tz_convert(inst.exchange_tz)
+        minutes = local.hour * 60 + local.minute
+        start = inst.rth_start.hour * 60 + inst.rth_start.minute
+        end = inst.rth_end.hour * 60 + inst.rth_end.minute
+        mask = (minutes >= start) & (minutes < end)
+        mask &= local.dayofweek < 5   # no weekend session
+        return np.asarray(mask)
 
     # ------------------------------------------------------------------
     # Run strategy
@@ -294,9 +326,19 @@ class SMCStrategy:
         trade_start = pd.Timestamp(cfg.trade_start) if cfg.trade_start else None
         trade_end = pd.Timestamp(cfg.trade_end) if cfg.trade_end else None
 
+        # Regular Trading Hours mask (futures run ~23h; overnight is thin)
+        in_session = self._session_mask(base_idx)
+
+        inst = cfg.instrument
+        comm_rate = cfg.commission_per_contract
+
         def _trade(pos, exit_time, exit_price, pnl, exit_reason):
             d = "LONG" if pos["direction"] == 1 else "SHORT"
+            qty = pos["qty"]
+            commission = comm_rate * qty
+            slippage = inst.slippage_cost(qty) if cfg.apply_slippage else 0.0
             return {
+                "symbol": cfg.symbol,
                 "entry_time": pos["entry_time"],
                 "exit_time": exit_time,
                 "direction": d,
@@ -304,8 +346,12 @@ class SMCStrategy:
                 "exit_price": exit_price,
                 "sl": pos["sl"],
                 "tp": pos["tp"],
-                "qty": pos["qty"],
-                "pnl": pnl,
+                "qty": qty,
+                "pnl": pnl,                       # gross, before costs
+                "commission": commission,          # round turn, per contract
+                "slippage": slippage,
+                "net_pnl": pnl - commission - slippage,
+                "risk": pos.get("risk", 0.0),
                 "exit_reason": exit_reason,
                 "bias_d": pos.get("bias_d", 0),
                 "bias_h4": pos.get("bias_h4", 0),
@@ -431,23 +477,23 @@ class SMCStrategy:
                 hit = False
                 if position["direction"] == 1:
                     if lo <= position["sl"]:
-                        pnl = (position["sl"] - position["entry_price"]) * position["qty"]
+                        pnl = cfg.pnl(1, position["entry_price"], position["sl"], position["qty"])
                         trades.append(_trade(position, bar_time, position["sl"], pnl, "SL"))
                         position = None
                         hit = True
                     elif h >= position["tp"]:
-                        pnl = (position["tp"] - position["entry_price"]) * position["qty"]
+                        pnl = cfg.pnl(1, position["entry_price"], position["tp"], position["qty"])
                         trades.append(_trade(position, bar_time, position["tp"], pnl, "TP"))
                         position = None
                         hit = True
                 else:
                     if h >= position["sl"]:
-                        pnl = (position["entry_price"] - position["sl"]) * position["qty"]
+                        pnl = cfg.pnl(-1, position["entry_price"], position["sl"], position["qty"])
                         trades.append(_trade(position, bar_time, position["sl"], pnl, "SL"))
                         position = None
                         hit = True
                     elif lo <= position["tp"]:
-                        pnl = (position["entry_price"] - position["tp"]) * position["qty"]
+                        pnl = cfg.pnl(-1, position["entry_price"], position["tp"], position["qty"])
                         trades.append(_trade(position, bar_time, position["tp"], pnl, "TP"))
                         position = None
                         hit = True
@@ -455,11 +501,11 @@ class SMCStrategy:
                 if not hit:
                     # M5 BOS flip invalidation
                     if position["direction"] == 1 and m5_bear_edge[i]:
-                        pnl = (c - position["entry_price"]) * position["qty"]
+                        pnl = cfg.pnl(1, position["entry_price"], c, position["qty"])
                         trades.append(_trade(position, bar_time, c, pnl, "M5_BOS_FLIP"))
                         position = None
                     elif position["direction"] == -1 and m5_bull_edge[i]:
-                        pnl = (position["entry_price"] - c) * position["qty"]
+                        pnl = cfg.pnl(-1, position["entry_price"], c, position["qty"])
                         trades.append(_trade(position, bar_time, c, pnl, "M5_BOS_FLIP"))
                         position = None
 
@@ -470,6 +516,8 @@ class SMCStrategy:
             if trade_start and bar_time < trade_start:
                 continue
             if trade_end and bar_time > trade_end:
+                continue
+            if in_session is not None and not in_session[i]:
                 continue
 
             if range_cooldown or not m5_confirmed:
@@ -512,13 +560,14 @@ class SMCStrategy:
                         tp_dist = abs(tp1 - c)
                         rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
 
-                        if rr >= cfg.min_rr and sl_dist > 0:
-                            qty = cfg.risk_per_trade / sl_dist
+                        qty = cfg.size_position(sl_dist) if sl_dist > 0 else 0.0
+                        if rr >= cfg.min_rr and sl_dist > 0 and qty > 0:
                             entry_attempts += 1
                             position = {
                                 "direction": direction,
                                 "entry_price": c,
                                 "sl": sl, "tp": tp1, "qty": qty,
+                                "risk": inst.risk_per_contract(sl_dist) * qty,
                                 "entry_time": bar_time,
                                 "bias_d": bd, "bias_h4": bh4,
                                 "bias_h1": bh1, "bias_m30": bm30,
@@ -539,7 +588,7 @@ class SMCStrategy:
                     ob_bot = m1_ob_bull_bot[i]
                     # Price touching OB zone (aggressive entry)
                     if not np.isnan(ob_top) and not np.isnan(ob_bot) and lo <= ob_top:
-                        entry_price = ob_top  # enter at OB top (limit fill)
+                        entry_price = inst.round_price(ob_top)  # limit fill at OB top
                         sl = self._compute_sl(
                             1, entry_price,
                             m1_sh1[i], m1_sl1[i],
@@ -554,13 +603,14 @@ class SMCStrategy:
                             tp_dist = abs(tp1 - entry_price)
                             rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
 
-                            if rr >= cfg.min_rr and sl_dist > 0:
-                                qty = cfg.risk_per_trade / sl_dist
+                            qty = cfg.size_position(sl_dist) if sl_dist > 0 else 0.0
+                            if rr >= cfg.min_rr and sl_dist > 0 and qty > 0:
                                 entry_attempts += 1
                                 position = {
                                     "direction": 1,
                                     "entry_price": entry_price,
                                     "sl": sl, "tp": tp1, "qty": qty,
+                                    "risk": inst.risk_per_contract(sl_dist) * qty,
                                     "entry_time": bar_time,
                                     "bias_d": bd, "bias_h4": bh4,
                                     "bias_h1": bh1, "bias_m30": bm30,
@@ -577,7 +627,7 @@ class SMCStrategy:
                     ob_top = m1_ob_bear_top[i]
                     ob_bot = m1_ob_bear_bot[i]
                     if not np.isnan(ob_top) and not np.isnan(ob_bot) and h >= ob_bot:
-                        entry_price = ob_bot
+                        entry_price = inst.round_price(ob_bot)
                         sl = self._compute_sl(
                             -1, entry_price,
                             m1_sh1[i], m1_sl1[i],
@@ -592,13 +642,14 @@ class SMCStrategy:
                             tp_dist = abs(tp1 - entry_price)
                             rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
 
-                            if rr >= cfg.min_rr and sl_dist > 0:
-                                qty = cfg.risk_per_trade / sl_dist
+                            qty = cfg.size_position(sl_dist) if sl_dist > 0 else 0.0
+                            if rr >= cfg.min_rr and sl_dist > 0 and qty > 0:
                                 entry_attempts += 1
                                 position = {
                                     "direction": -1,
                                     "entry_price": entry_price,
                                     "sl": sl, "tp": tp1, "qty": qty,
+                                    "risk": inst.risk_per_contract(sl_dist) * qty,
                                     "entry_time": bar_time,
                                     "bias_d": bd, "bias_h4": bh4,
                                     "bias_h1": bh1, "bias_m30": bm30,
@@ -615,9 +666,9 @@ class SMCStrategy:
         if position is not None:
             c = closes[-1]
             if position["direction"] == 1:
-                pnl = (c - position["entry_price"]) * position["qty"]
+                pnl = cfg.pnl(1, position["entry_price"], c, position["qty"])
             else:
-                pnl = (position["entry_price"] - c) * position["qty"]
+                pnl = cfg.pnl(-1, position["entry_price"], c, position["qty"])
             trades.append(_trade(position, base_idx[-1], c, pnl, "END_OF_DATA"))
 
         return pd.DataFrame(trades)

@@ -11,7 +11,10 @@ from strategy import SMCStrategy
 from backtest import compute_metrics, print_report
 from report import build_report, save_report
 
-SYMBOLS = ["EURUSD", "GBPUSD"]
+# Offline mode reads data_1m_<SYMBOL>.csv. get_free_data.py only serves FX
+# (HistData has no futures); for MES/MNQ export M1 bars from MT5 or your data
+# vendor to data_1m_MES.csv with columns time,open,high,low,close,volume.
+SYMBOLS = sys.argv[1:] or ["MES", "MNQ"]
 MAX_BARS = 500000
 
 def run_symbol(symbol: str):
@@ -24,10 +27,11 @@ def run_symbol(symbol: str):
         symbol=symbol,
         mt5_bars=MAX_BARS,
         initial_capital=10000,
-        risk_per_trade=500,
+        risk_per_trade=250,
         min_rr=2.0
     )
 
+    print(f"  {cfg.instrument.summary()}")
     print(f"\n[1/4] Loading local {symbol} data...")
     timeframes = [cfg.tf_d1, cfg.tf_h4, cfg.tf_h1, cfg.tf_m30, cfg.tf_m5, cfg.tf_m1]
     t0 = time.time()
@@ -62,7 +66,7 @@ def run_symbol(symbol: str):
         print(f"\n  No trades generated for {symbol}.")
         return None
 
-    metrics = compute_metrics(trades, cfg.initial_capital, cfg.commission_pct)
+    metrics = compute_metrics(trades, cfg.initial_capital, cfg)
     print_report(metrics, trades)
 
     print("\n[4/4] Generating HTML report...")
