@@ -34,6 +34,10 @@ def parse_args():
     p.add_argument("--capital", type=float, default=10000, help="Initial capital")
     p.add_argument("--risk", type=float, default=500, help="Risk per trade ($)")
     p.add_argument("--min-rr", type=float, default=2.0, help="Minimum RR to enter")
+    p.add_argument("--commission", type=float, default=7.0,
+                   help="Commission per standard lot, round turn ($)")
+    p.add_argument("--spread", type=float, default=0.2,
+                   help="Spread in pips paid on the entry fill")
     p.add_argument("--plot", action="store_true", help="Show equity/drawdown plot")
     p.add_argument("--csv", default="", help="Export trades to CSV")
     return p.parse_args()
@@ -48,6 +52,8 @@ def main():
         initial_capital=args.capital,
         risk_per_trade=args.risk,
         min_rr=args.min_rr,
+        commission_per_lot=args.commission,
+        spread_pips=args.spread,
         trade_start=args.start,
         trade_end=args.end,
     )
@@ -88,7 +94,7 @@ def main():
         return
 
     # ---- Metrics ----
-    metrics = compute_metrics(trades, cfg.initial_capital, cfg.commission_pct)
+    metrics = compute_metrics(trades, cfg.initial_capital, cfg.commission_per_lot, cfg.contract_size)
     print_report(metrics, trades)
 
     # ---- CSV export ----

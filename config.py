@@ -37,8 +37,16 @@ class Config:
     # Risk
     risk_per_trade: float = 500.0
     initial_capital: float = 10000.0
-    commission_pct: float = 0.01
-    slippage_points: int = 2
+
+    # Transaction costs
+    # A raw/ECN ("zero spread") account charges a near-zero spread plus an
+    # explicit per-lot commission; a standard account charges $0 commission
+    # and buries the same cost in a wider spread. Model both so the two
+    # account types can be compared on total cost, not on the label.
+    contract_size: int = 100_000     # Units per standard lot
+    commission_per_lot: float = 7.0  # Round turn, per standard lot
+    spread_pips: float = 0.2         # Half-spread is paid on entry fill
+    slippage_points: int = 2         # Adverse points on entry fill
 
     # Entry / cooldown
     max_entry_attempts: int = 2    # Entries before range cooldown
@@ -58,6 +66,16 @@ class Config:
 
     # MT5 data
     mt5_bars: int = 100000           # Max bars to fetch per timeframe
+
+    @property
+    def pip(self) -> float:
+        """Price move of one pip (10 points on a 5-digit feed)."""
+        return self.point * 10
+
+    @property
+    def entry_cost_price(self) -> float:
+        """Adverse price offset applied to every entry fill."""
+        return self.spread_pips * self.pip + self.slippage_points * self.point
 
     @property
     def sl_buffer(self) -> float:

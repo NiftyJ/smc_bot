@@ -5,18 +5,30 @@ import pandas as pd
 
 
 def compute_metrics(trades: pd.DataFrame, initial_capital: float,
-                    commission_pct: float = 0.01) -> dict:
-    """Compute strategy performance metrics from trade log."""
+                    commission_per_lot: float = 7.0,
+                    contract_size: int = 100_000) -> dict:
+    """Compute strategy performance metrics from trade log.
+
+    Commission is charged per standard lot actually traded, round turn.
+    Because position size is risk / stop distance, tighter stops mean more
+    lots for the same dollar risk — so commission per trade grows as stops
+    shrink, even though the risk budget does not. Spread and slippage are
+    charged separately, inside the entry fill in strategy.py.
+    """
     if trades.empty:
         return {"total_trades": 0, "net_pnl": 0.0, "win_rate": 0.0}
 
     pnl = trades["pnl"].values.copy()
-    # Apply commission as fixed cost per lot traded (not % of notional)
-    # For forex: commission is typically $7/lot round trip
-    # qty here is in units, so approximate lots = qty * point_value
-    # Simpler: use a small fixed cost per trade as a proxy
-    commissions = np.full(len(pnl), 0.70)  # ~$0.70 per micro-lot round trip
+    if "lots" in trades.columns:
+        lots = trades["lots"].values
+    else:
+        lots = trades["qty"].values / contract_size
+    commissions = lots * commission_per_lot
     pnl -= commissions
+
+    gross_pnl = trades["pnl"].values.sum()
+    cost_drag_pct = (commissions.sum() / abs(gross_pnl) * 100
+                     if gross_pnl != 0 else float("inf"))
 
     wins = pnl[pnl > 0]
     losses = pnl[pnl <= 0]
@@ -90,7 +102,11 @@ def compute_metrics(trades: pd.DataFrame, initial_capital: float,
         "recovery_factor": round(recovery_factor, 3),
         "max_win_streak": max_streak_w,
         "max_loss_streak": max_streak_l,
+        "gross_pnl_before_costs": round(gross_pnl, 2),
         "total_commissions": round(commissions.sum(), 2),
+        "total_lots": round(lots.sum(), 2),
+        "avg_commission_per_trade": round(commissions.mean(), 2),
+        "commission_pct_of_gross": round(cost_drag_pct, 1),
         "exit_reasons": exit_counts,
         "entry_modes": mode_counts,
         "long_trades": len(longs),
@@ -123,7 +139,11 @@ def print_report(metrics: dict, trades: pd.DataFrame):
     print(f"  Recovery Factor:  {metrics['recovery_factor']}")
     print(f"  Max Win Streak:   {metrics['max_win_streak']}")
     print(f"  Max Loss Streak:  {metrics['max_loss_streak']}")
-    print(f"  Commissions:      ${metrics['total_commissions']:,.2f}")
+    print(f"  Gross PnL:        ${metrics['gross_pnl_before_costs']:,.2f} (before commission)")
+    print(f"  Commissions:      ${metrics['total_commissions']:,.2f} "
+          f"({metrics['commission_pct_of_gross']}% of gross)")
+    print(f"  Total Lots:       {metrics['total_lots']:,.2f}")
+    print(f"  Avg Comm/Trade:   ${metrics['avg_commission_per_trade']:,.2f}")
 
     print(f"\n  --- Direction ---")
     print(f"  Long:  {metrics['long_trades']} trades, PnL ${metrics['long_pnl']:,.2f}")

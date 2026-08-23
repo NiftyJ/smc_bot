@@ -305,6 +305,8 @@ class SMCStrategy:
                 "sl": pos["sl"],
                 "tp": pos["tp"],
                 "qty": pos["qty"],
+                "lots": pos["qty"] / cfg.contract_size,
+                "sl_pips": abs(pos["entry_price"] - pos["sl"]) / cfg.pip,
                 "pnl": pnl,
                 "exit_reason": exit_reason,
                 "bias_d": pos.get("bias_d", 0),
@@ -508,8 +510,9 @@ class SMCStrategy:
                     tp1 = tp_levels[0] if tp_levels else np.nan
 
                     if not np.isnan(sl) and not np.isnan(tp1):
-                        sl_dist = abs(c - sl)
-                        tp_dist = abs(tp1 - c)
+                        fill = c + direction * cfg.entry_cost_price
+                        sl_dist = abs(fill - sl)
+                        tp_dist = abs(tp1 - fill)
                         rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
 
                         if rr >= cfg.min_rr and sl_dist > 0:
@@ -517,7 +520,7 @@ class SMCStrategy:
                             entry_attempts += 1
                             position = {
                                 "direction": direction,
-                                "entry_price": c,
+                                "entry_price": fill,
                                 "sl": sl, "tp": tp1, "qty": qty,
                                 "entry_time": bar_time,
                                 "bias_d": bd, "bias_h4": bh4,
@@ -550,8 +553,9 @@ class SMCStrategy:
                         tp1 = tp_levels[0] if tp_levels else np.nan
 
                         if not np.isnan(sl) and not np.isnan(tp1):
-                            sl_dist = abs(entry_price - sl)
-                            tp_dist = abs(tp1 - entry_price)
+                            fill = entry_price + (1) * cfg.entry_cost_price
+                            sl_dist = abs(fill - sl)
+                            tp_dist = abs(tp1 - fill)
                             rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
 
                             if rr >= cfg.min_rr and sl_dist > 0:
@@ -559,7 +563,7 @@ class SMCStrategy:
                                 entry_attempts += 1
                                 position = {
                                     "direction": 1,
-                                    "entry_price": entry_price,
+                                    "entry_price": fill,
                                     "sl": sl, "tp": tp1, "qty": qty,
                                     "entry_time": bar_time,
                                     "bias_d": bd, "bias_h4": bh4,
@@ -588,8 +592,9 @@ class SMCStrategy:
                         tp1 = tp_levels[0] if tp_levels else np.nan
 
                         if not np.isnan(sl) and not np.isnan(tp1):
-                            sl_dist = abs(entry_price - sl)
-                            tp_dist = abs(tp1 - entry_price)
+                            fill = entry_price + (-1) * cfg.entry_cost_price
+                            sl_dist = abs(fill - sl)
+                            tp_dist = abs(tp1 - fill)
                             rr = tp_dist / sl_dist if sl_dist > 0 else 0.0
 
                             if rr >= cfg.min_rr and sl_dist > 0:
@@ -597,7 +602,7 @@ class SMCStrategy:
                                 entry_attempts += 1
                                 position = {
                                     "direction": -1,
-                                    "entry_price": entry_price,
+                                    "entry_price": fill,
                                     "sl": sl, "tp": tp1, "qty": qty,
                                     "entry_time": bar_time,
                                     "bias_d": bd, "bias_h4": bh4,
